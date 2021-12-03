@@ -41,53 +41,59 @@ impl<F: FieldExt> RunningSum<F> {
 
     fn assign_region(
         &self,
-        region: &mut Region<'_, F>,
+        layouter: &mut impl Layouter<F>,
         initial: Option<CellF<F>>,
         cells: Vec<CellF<F>>,
     ) -> Result<(CellF<F>, CellF<F>), Error> {
-        let mut offset = 0;
-        let value = match initial.clone() {
-            Some(cell_f) => cell_f.value,
-            None => F::zero(),
-        };
-        let cell = region.assign_advice(
-            || "initial",
-            self.acc,
-            offset,
-            || Ok(value),
-        )?;
-        match &initial {
-            Some(cell_f) => {
-                region.constrain_equal(cell_f.cell, cell)?;
-            }
-            None => {}
-        };
-        offset += 1;
-        let initial = CellF { cell, value };
-
-        let sum: Result<CellF<F>, Error> =
-            cells.iter().try_fold(initial.clone(), |acc_cell, x| {
-                let x_cell = region.assign_advice(
-                    || "x",
-                    self.x,
-                    offset,
-                    || Ok(x.value),
-                )?;
-                // region.constrain_equal(x.cell, x_cell)?;
-                self.q_enable.enable(region, offset)?;
-
-                let value = acc_cell.value + x.value;
+        let (initial, sum) = layouter.assign_region(
+            || "running sum",
+            |mut region| {
+                let mut offset = 0;
+                let value = match initial.clone() {
+                    Some(cell_f) => cell_f.value,
+                    None => F::zero(),
+                };
                 let cell = region.assign_advice(
-                    || "acc",
+                    || "initial",
                     self.acc,
                     offset,
                     || Ok(value),
                 )?;
+                match &initial {
+                    Some(cell_f) => {
+                        region.constrain_equal(cell_f.cell, cell)?;
+                    }
+                    None => {}
+                };
                 offset += 1;
+                let initial = CellF { cell, value };
 
-                Ok(CellF { cell, value })
-            });
-        let sum = sum?;
+                let sum: Result<CellF<F>, Error> =
+                    cells.iter().try_fold(initial.clone(), |acc_cell, x| {
+                        let x_cell = region.assign_advice(
+                            || "x",
+                            self.x,
+                            offset,
+                            || Ok(x.value),
+                        )?;
+                        // region.constrain_equal(x.cell, x_cell)?;
+                        self.q_enable.enable(&mut region, offset)?;
+
+                        let value = acc_cell.value + x.value;
+                        let cell = region.assign_advice(
+                            || "acc",
+                            self.acc,
+                            offset,
+                            || Ok(value),
+                        )?;
+                        offset += 1;
+
+                        Ok(CellF { cell, value })
+                    });
+                let sum = sum?;
+                Ok((initial, sum))
+            },
+        )?;
         Ok((initial, sum))
     }
 }
@@ -125,35 +131,54 @@ mod tests {
             }
             fn assign_region(
                 &self,
-                region: &mut Region<'_, F>,
+                mut layouter: impl Layouter<F>,
                 values: Vec<F>,
             ) -> Result<(F, F), Error> {
-                let cells: Vec<CellF<F>> = values
-                    .iter()
-                    .enumerate()
-                    .map(|(offset, &value)| {
-                        let cell = region
-                            .assign_advice(
-                                || "input",
-                                self.input,
-                                offset,
-                                || Ok(value),
-                            )
-                            .unwrap();
-                        CellF { cell, value }
-                    })
-                    .collect::<Vec<CellF<F>>>();
-                let (initial, sum) =
-                    self.running_sum.assign_region(region, None, cells)?;
+                let cells = layouter.assign_region(
+                    || "assign input",
+                    |mut region| {
+                        let cells: Vec<CellF<F>> = values
+                            .iter()
+                            .enumerate()
+                            .map(|(offset, &value)| {
+                                let cell = region
+                                    .assign_advice(
+                                        || "input",
+                                        self.input,
+                                        offset,
+                                        || Ok(value),
+                                    )
+                                    .unwrap();
 
-                let offset = 0;
-                let cell = region.assign_advice(
-                    || "output",
-                    self.output,
-                    offset,
-                    || Ok(values.iter().fold(F::zero(), |acc, &x| acc + x)),
+                                CellF { cell, value }
+                            })
+                            .collect::<Vec<CellF<F>>>();
+                        Ok(cells)
+                    },
                 )?;
-                // region.constrain_equal(cell, sum.cell)?;
+                let (initial, sum) = self.running_sum.assign_region(
+                    &mut layouter,
+                    None,
+                    cells,
+                )?;
+                layouter.assign_region(
+                    || "assign output",
+                    |mut region| {
+                        let offset = 0;
+                        let cell = region.assign_advice(
+                            || "output",
+                            self.output,
+                            offset,
+                            || {
+                                Ok(values
+                                    .iter()
+                                    .fold(F::zero(), |acc, &x| acc + x))
+                            },
+                        )?;
+                        // region.constrain_equal(cell, sum.cell)?;
+                        Ok(())
+                    },
+                )?;
                 Ok((initial.value, sum.value))
             }
         }
@@ -181,15 +206,8 @@ mod tests {
                 config: Self::Config,
                 mut layouter: impl Layouter<F>,
             ) -> Result<(), Error> {
-                layouter.assign_region(
-                    || "main region",
-                    |mut region| {
-                        config
-                            .assign_region(&mut region, self.values.clone())?;
-                        // println!("region {:?}", region);
-                        Ok(())
-                    },
-                )?;
+                config.assign_region(layouter, self.values.clone())?;
+                // println!("region {:?}", region);
                 Ok(())
             }
         }
