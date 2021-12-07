@@ -28,7 +28,7 @@ pub struct RunningSum<F> {
 /// |2      | 5 |  8  |
 /// |3      | 1 |  9  |
 impl<F: FieldExt> RunningSum<F> {
-    fn configure(
+    pub fn configure(
         meta: &mut ConstraintSystem<F>,
         input: Column<Advice>,
         output: Column<Advice>,
@@ -58,7 +58,7 @@ impl<F: FieldExt> RunningSum<F> {
         }
     }
 
-    fn assign_region(
+    pub fn assign_region(
         &self,
         layouter: &mut impl Layouter<F>,
         initial: Option<CellF<F>>,
