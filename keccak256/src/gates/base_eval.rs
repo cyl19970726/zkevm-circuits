@@ -41,10 +41,10 @@ impl<F: FieldExt> BaseEvaluationConfig<F> {
             let acc_next = meta.query_advice(acc, Rotation::next());
             let acc = meta.query_advice(acc, Rotation::cur());
 
-            // acc_{i+1} = acc_{i} + coef * base ** power
+            // acc_{i+1} = acc_{i} * base ** power + coef
             vec![(
                 "running sum",
-                q_enable * (acc_next - acc - coef * power_of_base),
+                q_enable * (acc_next - acc * power_of_base - coef),
             )]
         });
 
@@ -63,14 +63,14 @@ impl<F: FieldExt> BaseEvaluationConfig<F> {
         layouter: &mut impl Layouter<F>,
         result: CellF<F>,
         coefs: &Vec<F>,
-        chunk_ids: Vec<u64>,
+        power_of_bases: &Vec<F>,
     ) -> Result<(), Error> {
         layouter.assign_region(
             || "Base eval",
             |mut region| {
                 let mut acc = F::zero();
-                for (offset, (&chunk_id, &coef)) in
-                    chunk_ids.iter().zip(coefs).enumerate()
+                for (offset, (&pob, &coef)) in
+                    power_of_bases.iter().zip(coefs).enumerate()
                 {
                     region.assign_advice(
                         || "Coef",
@@ -78,7 +78,6 @@ impl<F: FieldExt> BaseEvaluationConfig<F> {
                         offset,
                         || Ok(coef),
                     )?;
-                    let pob = F::from(self.base).pow(&[chunk_id, 0, 0, 0]);
                     region.assign_fixed(
                         || "Power of base",
                         self.power_of_base,
@@ -94,12 +93,12 @@ impl<F: FieldExt> BaseEvaluationConfig<F> {
                     if offset == 0 {
                         region.constrain_constant(acc_cell, F::zero())?;
                     }
-                    acc += coef * pob;
+                    acc = acc * pob + coef;
                 }
                 let final_acc = region.assign_advice(
                     || "Final Acc",
                     self.acc,
-                    chunk_ids.len(),
+                    coefs.len(),
                     || Ok(acc),
                 )?;
 
