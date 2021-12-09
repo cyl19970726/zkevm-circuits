@@ -2,12 +2,12 @@
 //! query a Geth node in order to get a Block, Tx or Trace info.
 
 use crate::eth_types::{
-    Address, Block, Bytes, GethExecTrace, Hash, ResultGethExecTraces,
-    Transaction, Word, H256, U256, U64,
+    Address, Block, Bytes, EIP1186ProofResponse, GethExecTrace, Hash,
+    ResultGethExecTraces, Transaction, Word, U64,
 };
 use crate::Error;
 use ethers_providers::JsonRpcClient;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Serialize, Serializer};
 
 /// Serialize a type.
 ///
@@ -23,7 +23,7 @@ pub fn serialize<T: serde::Serialize>(t: &T) -> serde_json::Value {
 #[derive(Debug)]
 pub enum BlockNumber {
     /// Specific block number
-    Num(U64),
+    Num(u64),
     /// Earliest block
     Earliest,
     /// Latest block
@@ -34,7 +34,7 @@ pub enum BlockNumber {
 
 impl From<u64> for BlockNumber {
     fn from(num: u64) -> Self {
-        BlockNumber::Num(U64::from(num))
+        BlockNumber::Num(num)
     }
 }
 
@@ -44,40 +44,12 @@ impl Serialize for BlockNumber {
         S: Serializer,
     {
         match self {
-            BlockNumber::Num(num) => num.serialize(serializer),
+            BlockNumber::Num(num) => U64::from(*num).serialize(serializer),
             BlockNumber::Earliest => "earliest".serialize(serializer),
             BlockNumber::Latest => "latest".serialize(serializer),
             BlockNumber::Pending => "pending".serialize(serializer),
         }
     }
-}
-
-/// Struct used to define the storage proof
-#[derive(Debug, Default, Clone, PartialEq, Deserialize, Serialize)]
-pub struct StorageProof {
-    /// Storage key
-    pub key: H256,
-    /// Storage proof: rlp-encoded trie nodes from root to value.
-    pub proof: Vec<Bytes>,
-    /// Storage Value
-    pub value: U256,
-}
-
-/// Struct used to define the result of `eth_getProof` call
-#[derive(Debug, Default, Clone, PartialEq, Deserialize, Serialize)]
-pub struct EIP1186ProofResponse {
-    /// The balance of the account
-    pub balance: U256,
-    /// The hash of the code of the account
-    pub codeHash: H256,
-    /// The nonce of the account
-    pub nonce: U256,
-    /// SHA3 of the StorageRoot
-    pub storageHash: H256,
-    /// Array of rlp-serialized MerkleTree-Nodes
-    pub accountProof: Vec<Bytes>,
-    /// Array of storage-entries as requested
-    pub storageProof: Vec<StorageProof>,
 }
 
 /// Placeholder structure designed to contain the methods that the BusMapping

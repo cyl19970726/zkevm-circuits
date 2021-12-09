@@ -1,161 +1,84 @@
-#![cfg(feature = "test_rpc")]
+#![cfg(feature = "rpc")]
 
-use bus_mapping::eth_types::{Address, EIP1186ProofResponse, Hash, Word};
-use bus_mapping::evm::ProgramCounter;
-use bus_mapping::rpc::{BlockNumber, GethClient};
-use integration_tests::get_client;
-use std::env::{self, VarError};
-use std::str::FromStr;
+use bus_mapping::eth_types::{StorageProof, Word};
+use integration_tests::{
+    get_client, CompiledContract, GenDataOutput, CONTRACTS_PATH,
+};
+use lazy_static::lazy_static;
+use pretty_assertions::assert_eq;
+use std::fs::File;
+use std::path::Path;
 
-#[tokio::test]
-async fn test_get_block_by_number() {
-    let cli = get_client();
-    let hash = Hash::from_str(
-        "0xe4f7aa19a76fcf31a6adff3b400300849e39dd84076765fb3af09d05ee9d787a",
-    )
-    .unwrap();
-    let block_by_num_latest =
-        cli.get_block_by_number(BlockNumber::Latest).await.unwrap();
-    assert!(hash == block_by_num_latest.hash.unwrap());
-    let block_by_num = cli.get_block_by_number(1u64.into()).await.unwrap();
-    assert!(
-        block_by_num.transactions[0].hash
-            == block_by_num_latest.transactions[0].hash
-    );
+lazy_static! {
+    pub static ref GEN_DATA: GenDataOutput = GenDataOutput::load();
 }
 
 #[tokio::test]
-async fn test_get_block_by_hash() {
+async fn test_get_block_by_number_by_hash() {
     let cli = get_client();
-
-    let hash = Hash::from_str(
-        "0xe4f7aa19a76fcf31a6adff3b400300849e39dd84076765fb3af09d05ee9d787a",
-    )
-    .unwrap();
-    let block_by_hash = cli.get_block_by_hash(hash).await.unwrap();
-    assert!(hash == block_by_hash.hash.unwrap());
+    let block_by_num = cli.get_block_by_number(1.into()).await.unwrap();
+    let block_by_hash = cli
+        .get_block_by_hash(block_by_num.hash.unwrap())
+        .await
+        .unwrap();
+    assert!(block_by_num == block_by_hash);
+    // Transaction 1 is a transfer from coinbase to wallet0
+    assert_eq!(block_by_num.transactions.len(), 1);
+    assert_eq!(block_by_num.transactions[0].from, GEN_DATA.coinbase);
+    assert_eq!(block_by_num.transactions[0].to, Some(GEN_DATA.wallets[0]));
 }
 
 #[tokio::test]
-async fn test_trace_block_by_hash() {
-    let cli = get_client();
+async fn test_trace_block_by_number_by_hash() {
+    let block_num = GEN_DATA.deployments.get("Greeter").unwrap().0;
 
-    let hash = Hash::from_str(
-        "0xe2d191e9f663a3a950519eadeadbd614965b694a65a318a0b8f053f2d14261ff",
-    )
-    .unwrap();
-    let trace_by_hash = cli.trace_block_by_hash(hash).await.unwrap();
-    // Since we called in the test block the same transaction twice the len
-    // should be the same and != 0.
-    assert!(
-        trace_by_hash[0].struct_logs.len()
-            == trace_by_hash[1].struct_logs.len()
-    );
-    assert!(!trace_by_hash[0].struct_logs.is_empty());
-    assert_eq!(trace_by_hash[0].struct_logs.len(), 116);
-    assert_eq!(
-        trace_by_hash[0].struct_logs.last().unwrap().pc,
-        ProgramCounter::from(180)
-    );
+    let cli = get_client();
+    let block = cli.get_block_by_number(block_num.into()).await.unwrap();
+    let trace_by_number =
+        cli.trace_block_by_number(block_num.into()).await.unwrap();
+    let trace_by_hash =
+        cli.trace_block_by_hash(block.hash.unwrap()).await.unwrap();
+    assert_eq!(trace_by_number, trace_by_hash);
+    assert!(!trace_by_number[0].struct_logs.is_empty())
 }
 
 #[tokio::test]
 async fn test_get_contract_code() {
+    let contract_name = "Greeter";
+    let contract_path_json = "greeter/Greeter.json";
+
+    let (block_num, address) = GEN_DATA.deployments.get(contract_name).unwrap();
+    let path_json = Path::new(CONTRACTS_PATH).join(contract_path_json);
+    let compiled: CompiledContract = serde_json::from_reader(
+        File::open(path_json).expect("cannot read file"),
+    )
+    .expect("cannot deserialize json from file");
+
     let cli = get_client();
-    let contract_address =
-        address!("0xd5f110b3e81de87f22fa8c5e668a5fc541c54e3d");
-    let contract_code = get_contract_vec_u8();
-    let gotten_contract_code = cli
-        .get_code_by_address(contract_address, BlockNumber::Latest)
+    let code = cli
+        .get_code_by_address(*address, (*block_num).into())
         .await
         .unwrap();
-    assert_eq!(contract_code, gotten_contract_code);
-}
-
-#[tokio::test]
-async fn test_trace_block_by_number() {
-    let cli = get_client();
-    let trace_by_hash = cli.trace_block_by_number(5.into()).await.unwrap();
-    // Since we called in the test block the same transaction twice the len
-    // should be the same and != 0.
-    assert!(
-        trace_by_hash[0].struct_logs.len()
-            == trace_by_hash[1].struct_logs.len()
-    );
-    assert!(!trace_by_hash[0].struct_logs.is_empty());
-    assert_eq!(trace_by_hash[0].struct_logs.len(), 116);
-    assert_eq!(
-        trace_by_hash[0].struct_logs.last().unwrap().pc,
-        ProgramCounter::from(180)
-    );
+    assert_eq!(compiled.bin_runtime.to_vec(), code);
 }
 
 #[tokio::test]
 async fn test_get_proof() {
-    let cli = get_client();
+    let (block_num, address) = GEN_DATA.deployments.get("Greeter").unwrap();
+    // Key 0 corresponds to `Greeter.number`, which is initialized with 0x2a.
+    let expected_storage_proof_json = r#"{
+         "key": "0x0",
+         "value": "0x2a",
+         "proof": ["0xe3a120290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e5632a"]
+    }"#;
+    let expected_storage_proof: StorageProof =
+        serde_json::from_str(expected_storage_proof_json).unwrap();
 
-    let address =
-        Address::from_str("0x7F0d15C7FAae65896648C8273B6d7E43f58Fa842")
-            .unwrap();
-    let keys = vec![Word::from_str(
-        "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
-    )
-    .unwrap()];
+    let cli = get_client();
+    let keys = vec![Word::from(0)];
     let proof = cli
-        .get_proof(address, keys, BlockNumber::Latest)
+        .get_proof(*address, keys, (*block_num).into())
         .await
         .unwrap();
-    const TARGET_PROOF: &str = r#"{
-        "address": "0x7f0d15c7faae65896648c8273b6d7e43f58fa842",
-        "accountProof": [
-            "0xf873a12050fb4d3174ec89ef969c09fd4391602169760fb005ad516f5d172cbffb80e955b84ff84d8089056bc75e2d63100000a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
-        ],
-        "balance": "0x0",
-        "codeHash": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
-        "nonce": "0x0",
-        "storageHash": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
-        "storageProof": [
-            {
-                "key": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
-                "value": "0x0",
-                "proof": []
-            }
-        ]
-    }"#;
-    assert!(
-        serde_json::from_str::<EIP1186ProofResponse>(TARGET_PROOF).unwrap()
-            == proof
-    );
-}
-
-fn get_contract_vec_u8() -> Vec<u8> {
-    vec![
-        96, 128, 96, 64, 82, 52, 128, 21, 97, 0, 16, 87, 96, 0, 128, 253, 91,
-        80, 96, 4, 54, 16, 97, 0, 76, 87, 96, 0, 53, 96, 224, 28, 128, 99, 33,
-        132, 140, 70, 20, 97, 0, 81, 87, 128, 99, 46, 100, 206, 193, 20, 97, 0,
-        109, 87, 128, 99, 176, 242, 183, 42, 20, 97, 0, 139, 87, 128, 99, 243,
-        65, 118, 115, 20, 97, 0, 167, 87, 91, 96, 0, 128, 253, 91, 97, 0, 107,
-        96, 4, 128, 54, 3, 129, 1, 144, 97, 0, 102, 145, 144, 97, 1, 60, 86,
-        91, 97, 0, 197, 86, 91, 0, 91, 97, 0, 117, 97, 0, 218, 86, 91, 96, 64,
-        81, 97, 0, 130, 145, 144, 97, 1, 120, 86, 91, 96, 64, 81, 128, 145, 3,
-        144, 243, 91, 97, 0, 165, 96, 4, 128, 54, 3, 129, 1, 144, 97, 0, 160,
-        145, 144, 97, 1, 60, 86, 91, 97, 0, 227, 86, 91, 0, 91, 97, 0, 175, 97,
-        0, 237, 86, 91, 96, 64, 81, 97, 0, 188, 145, 144, 97, 1, 120, 86, 91,
-        96, 64, 81, 128, 145, 3, 144, 243, 91, 128, 96, 0, 129, 144, 85, 80,
-        96, 0, 97, 0, 215, 87, 96, 0, 128, 253, 91, 80, 86, 91, 96, 0, 128, 84,
-        144, 80, 144, 86, 91, 128, 96, 0, 129, 144, 85, 80, 80, 86, 91, 96, 0,
-        128, 97, 0, 249, 87, 96, 0, 128, 253, 91, 96, 0, 84, 144, 80, 144, 86,
-        91, 96, 0, 128, 253, 91, 96, 0, 129, 144, 80, 145, 144, 80, 86, 91, 97,
-        1, 25, 129, 97, 1, 6, 86, 91, 129, 20, 97, 1, 36, 87, 96, 0, 128, 253,
-        91, 80, 86, 91, 96, 0, 129, 53, 144, 80, 97, 1, 54, 129, 97, 1, 16, 86,
-        91, 146, 145, 80, 80, 86, 91, 96, 0, 96, 32, 130, 132, 3, 18, 21, 97,
-        1, 82, 87, 97, 1, 81, 97, 1, 1, 86, 91, 91, 96, 0, 97, 1, 96, 132, 130,
-        133, 1, 97, 1, 39, 86, 91, 145, 80, 80, 146, 145, 80, 80, 86, 91, 97,
-        1, 114, 129, 97, 1, 6, 86, 91, 130, 82, 80, 80, 86, 91, 96, 0, 96, 32,
-        130, 1, 144, 80, 97, 1, 141, 96, 0, 131, 1, 132, 97, 1, 105, 86, 91,
-        146, 145, 80, 80, 86, 254, 162, 100, 105, 112, 102, 115, 88, 34, 18,
-        32, 198, 65, 17, 183, 105, 192, 24, 239, 185, 163, 114, 200, 208, 240,
-        163, 224, 232, 124, 166, 82, 153, 136, 202, 171, 161, 44, 117, 159, 44,
-        234, 223, 52, 100, 115, 111, 108, 99, 67, 0, 8, 10, 0, 51,
-    ]
+    assert_eq!(expected_storage_proof, proof.storage_proof[0]);
 }

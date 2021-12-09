@@ -3,8 +3,8 @@ set -e
 
 ARG_DEFAULT_SUDO=
 ARG_DEFAULT_STEPS="setup gendata tests cleanup"
-ARG_DEFAULT_TESTS="test_rpc"
-# ARG_DEFAULT_TESTS="test_rpc test_bus-mapping"
+ARG_DEFAULT_TESTS="rpc"
+# ARG_DEFAULT_TESTS="rpc bus-mapping"
 
 usage() {
     cat >&2 << EOF
@@ -91,14 +91,14 @@ fi
 
 if [ -n "$STEP_GENDATA" ]; then
     echo "+ Gen blockchain data..."
-    # TODO: Delete output.json
+    rm gendata_output.json > /dev/null 2>&1 || true
     cargo run --bin gen_blockchain_data
 fi
 
 if [ -n "$STEP_TESTS" ]; then
     for testname in $ARG_TESTS; do
         echo "+ Running test group $testname"
-        cargo test --features $testname
+        cargo test --test $testname --features $testname
     done
 fi
 
