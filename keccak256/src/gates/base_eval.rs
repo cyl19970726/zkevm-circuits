@@ -6,16 +6,13 @@ use halo2::{
     plonk::{Advice, Column, ConstraintSystem, Error, Fixed, Selector},
     poly::Rotation,
 };
-use std::marker::PhantomData;
 
 #[derive(Debug, Clone)]
 pub struct BaseEvaluationConfig<F> {
     q_enable: Selector,
-    base: u64,
     pub coef: Column<Advice>,
-    power_of_base: Column<Fixed>,
+    power_of_base: F,
     acc: Column<Advice>,
-    _marker: PhantomData<F>,
 }
 
 impl<F: FieldExt> BaseEvaluationConfig<F> {
@@ -23,21 +20,21 @@ impl<F: FieldExt> BaseEvaluationConfig<F> {
     /// Enable equality on result and acc
     pub fn configure(
         meta: &mut ConstraintSystem<F>,
-        base: u64,
+        power_of_base: F,
         result: Column<Advice>,
     ) -> Self {
         let q_enable = meta.selector();
         let coef = meta.advice_column();
-        let power_of_base = meta.fixed_column();
         let acc = meta.advice_column();
+        // Bind result to acc
         meta.enable_equality(result.into());
+        // Bind first coef value to acc
+        meta.enable_equality(coef.into());
         meta.enable_equality(acc.into());
 
         meta.create_gate("Running sum", |meta| {
             let q_enable = meta.query_selector(q_enable);
             let coef = meta.query_advice(coef, Rotation::cur());
-            let power_of_base =
-                meta.query_fixed(power_of_base, Rotation::cur());
             let acc_next = meta.query_advice(acc, Rotation::next());
             let acc = meta.query_advice(acc, Rotation::cur());
 
@@ -50,11 +47,9 @@ impl<F: FieldExt> BaseEvaluationConfig<F> {
 
         Self {
             q_enable,
-            base,
             coef,
             power_of_base,
             acc,
-            _marker: PhantomData,
         }
     }
 
@@ -63,26 +58,18 @@ impl<F: FieldExt> BaseEvaluationConfig<F> {
         layouter: &mut impl Layouter<F>,
         result: CellF<F>,
         coefs: &Vec<F>,
-        power_of_bases: &Vec<F>,
     ) -> Result<(), Error> {
         layouter.assign_region(
             || "Base eval",
             |mut region| {
                 let mut acc = F::zero();
-                for (offset, (&pob, &coef)) in
-                    power_of_bases.iter().zip(coefs).enumerate()
-                {
-                    region.assign_advice(
+                for (offset, &coef) in coefs.iter().enumerate() {
+                    acc = acc * self.power_of_base + coef;
+                    let coef_cell = region.assign_advice(
                         || "Coef",
                         self.coef,
                         offset,
                         || Ok(coef),
-                    )?;
-                    region.assign_fixed(
-                        || "Power of base",
-                        self.power_of_base,
-                        offset,
-                        || Ok(pob),
                     )?;
                     let acc_cell = region.assign_advice(
                         || "Acc",
@@ -91,19 +78,13 @@ impl<F: FieldExt> BaseEvaluationConfig<F> {
                         || Ok(acc),
                     )?;
                     if offset == 0 {
-                        region.constrain_constant(acc_cell, F::zero())?;
+                        // bind first acc to first coef
+                        region.constrain_equal(acc_cell, coef_cell)?;
+                    } else if offset == coefs.len() - 1 {
+                        // bind last acc to result
+                        region.constrain_equal(acc_cell, result.cell)?;
                     }
-                    acc = acc * pob + coef;
                 }
-                let final_acc = region.assign_advice(
-                    || "Final Acc",
-                    self.acc,
-                    coefs.len(),
-                    || Ok(acc),
-                )?;
-
-                region.constrain_equal(final_acc, result.cell)?;
-
                 Ok(())
             },
         )?;

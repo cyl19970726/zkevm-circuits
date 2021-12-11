@@ -11,6 +11,7 @@ use pairing::arithmetic::FieldExt;
 #[derive(Clone, Debug)]
 struct BaseConversionConfig<F> {
     q_enable: Selector,
+    num_chunks: u32,
     input_table_col: TableColumn,
     output_table_col: TableColumn,
     input_eval: BaseEvaluationConfig<F>,
@@ -21,6 +22,7 @@ impl<F: FieldExt> BaseConversionConfig<F> {
     /// Side effect: input_lane and output_lane are equality enabled
     fn configure(
         meta: &mut ConstraintSystem<F>,
+        num_chunks: u32,
         input_base: u64,
         output_base: u64,
         input_table_col: TableColumn,
@@ -29,10 +31,13 @@ impl<F: FieldExt> BaseConversionConfig<F> {
         output_lane: Column<Advice>,
     ) -> Self {
         let q_enable = meta.selector();
+        let input_pob = F::from(input_base.pow(num_chunks));
+        let output_pob = F::from(output_base.pow(num_chunks));
+
         let input_eval =
-            BaseEvaluationConfig::configure(meta, input_base, input_lane);
+            BaseEvaluationConfig::configure(meta, input_pob, input_lane);
         let output_eval =
-            BaseEvaluationConfig::configure(meta, output_base, output_lane);
+            BaseEvaluationConfig::configure(meta, output_pob, output_lane);
 
         meta.lookup(|meta| {
             let q_enable = meta.query_selector(q_enable);
@@ -48,6 +53,7 @@ impl<F: FieldExt> BaseConversionConfig<F> {
 
         Self {
             q_enable,
+            num_chunks,
             input_table_col,
             output_table_col,
             input_eval,
@@ -62,21 +68,11 @@ impl<F: FieldExt> BaseConversionConfig<F> {
         output_lane: CellF<F>,
         input_coefs: &Vec<F>,
         output_coefs: &Vec<F>,
-        input_pob: &Vec<F>,
-        ouput_pob: &Vec<F>,
     ) -> Result<(), Error> {
-        self.input_eval.assign_region(
-            layouter,
-            input_lane,
-            input_coefs,
-            input_pob,
-        )?;
-        self.output_eval.assign_region(
-            layouter,
-            output_lane,
-            output_coefs,
-            ouput_pob,
-        )?;
+        self.input_eval
+            .assign_region(layouter, input_lane, input_coefs)?;
+        self.output_eval
+            .assign_region(layouter, output_lane, output_coefs)?;
         Ok(())
     }
 }
