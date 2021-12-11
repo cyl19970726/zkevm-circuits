@@ -4,20 +4,15 @@ use halo2::{
     poly::Rotation,
 };
 
-use crate::arith_helpers::{convert_b2_to_b13, mod_u64};
 use crate::gates::base_eval::BaseEvaluationConfig;
-use crate::gates::gate_helpers::f_to_biguint;
 use crate::gates::gate_helpers::CellF;
+use crate::gates::tables::BaseInfo;
 use pairing::arithmetic::FieldExt;
 
 #[derive(Clone, Debug)]
 struct BaseConversionConfig<F> {
     q_enable: Selector,
-    num_chunks: usize,
-    input_base: u64,
-    output_base: u64,
-    input_table_col: TableColumn,
-    output_table_col: TableColumn,
+    bi: BaseInfo<F>,
     input_eval: BaseEvaluationConfig<F>,
     output_eval: BaseEvaluationConfig<F>,
 }
@@ -26,22 +21,16 @@ impl<F: FieldExt> BaseConversionConfig<F> {
     /// Side effect: input_lane and output_lane are equality enabled
     fn configure(
         meta: &mut ConstraintSystem<F>,
-        num_chunks: usize,
-        input_base: u64,
-        output_base: u64,
-        input_table_col: TableColumn,
-        output_table_col: TableColumn,
+        bi: BaseInfo<F>,
         input_lane: Column<Advice>,
         output_lane: Column<Advice>,
     ) -> Self {
         let q_enable = meta.complex_selector();
-        let input_pob = F::from(input_base.pow(num_chunks as u32));
-        let output_pob = F::from(output_base.pow(num_chunks as u32));
 
         let input_eval =
-            BaseEvaluationConfig::configure(meta, input_pob, input_lane);
+            BaseEvaluationConfig::configure(meta, bi.input_pob(), input_lane);
         let output_eval =
-            BaseEvaluationConfig::configure(meta, output_pob, output_lane);
+            BaseEvaluationConfig::configure(meta, bi.output_pob(), output_lane);
 
         meta.lookup(|meta| {
             let q_enable = meta.query_selector(q_enable);
@@ -50,59 +39,17 @@ impl<F: FieldExt> BaseConversionConfig<F> {
             let output_slices =
                 meta.query_advice(output_eval.coef, Rotation::cur());
             vec![
-                (q_enable.clone() * input_slices, input_table_col),
-                (q_enable * output_slices, output_table_col),
+                (q_enable.clone() * input_slices, bi.input_tc),
+                (q_enable * output_slices, bi.output_tc),
             ]
         });
 
         Self {
             q_enable,
-            num_chunks,
-            input_base,
-            output_base,
-            input_table_col,
-            output_table_col,
+            bi,
             input_eval,
             output_eval,
         }
-    }
-
-    fn compute_coefs(&self, input: F) -> Result<(Vec<F>, Vec<F>), Error> {
-        // big-endian
-        let input_chunks: Vec<u64> = {
-            let mut raw = f_to_biguint(input).ok_or(Error::Synthesis)?;
-            // little endian
-            let mut input_chunks: Vec<u64> = (0..64)
-                .map(|_| {
-                    let remainder: u64 = mod_u64(&raw, self.input_base);
-                    raw /= self.input_base;
-                    remainder
-                })
-                .collect();
-            // big endian
-            input_chunks.reverse();
-            input_chunks
-        };
-        let input_coefs: Vec<F> = input_chunks
-            .chunks(self.num_chunks)
-            .map(|chunks| {
-                let coef = chunks
-                    .iter()
-                    // big endian
-                    .fold(0, |acc, &x| acc * self.input_base + x);
-                F::from(coef)
-            })
-            .collect();
-
-        let output_coefs: Vec<F> = input_chunks
-            .chunks(self.num_chunks)
-            .map(|chunks| {
-                let coef =
-                    chunks.iter().fold(0, |acc, &x| acc * self.output_base + x);
-                F::from(coef)
-            })
-            .collect();
-        Ok((input_coefs, output_coefs))
     }
 
     pub fn assign_region(
@@ -112,7 +59,7 @@ impl<F: FieldExt> BaseConversionConfig<F> {
         output_lane: CellF<F>,
     ) -> Result<(), Error> {
         let (input_coefs, output_coefs) =
-            self.compute_coefs(input_lane.value)?;
+            self.bi.compute_coefs(input_lane.value)?;
         self.input_eval
             .assign_region(layouter, input_lane, &input_coefs)?;
         self.output_eval
@@ -138,9 +85,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     #[test]
     fn test_base_conversion() {
-        const INPUT_BASE: u64 = 2;
-        const OUTPUT_BASE: u64 = 13;
-
         #[derive(Debug, Clone)]
         struct MyConfig<F> {
             input_lane: Column<Advice>,
@@ -153,13 +97,10 @@ mod tests {
                 let table = FromBinaryTableConfig::configure(meta);
                 let input_lane = meta.advice_column();
                 let output_lane = meta.advice_column();
+                let bi = table.get_base_info(false);
                 let conversion = BaseConversionConfig::configure(
                     meta,
-                    table.num_chunks(),
-                    INPUT_BASE,
-                    OUTPUT_BASE,
-                    table.base2,
-                    table.base13,
+                    bi,
                     input_lane,
                     output_lane,
                 );
