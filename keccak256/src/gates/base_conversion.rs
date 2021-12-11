@@ -18,6 +18,7 @@ struct BaseConversionConfig<F> {
 }
 
 impl<F: FieldExt> BaseConversionConfig<F> {
+    /// Side effect: input_lane and output_lane are equality enabled
     fn configure(
         meta: &mut ConstraintSystem<F>,
         input_base: u64,
@@ -28,10 +29,6 @@ impl<F: FieldExt> BaseConversionConfig<F> {
         output_lane: Column<Advice>,
     ) -> Self {
         let q_enable = meta.selector();
-
-        meta.enable_equality(input_lane.into());
-        meta.enable_equality(output_lane.into());
-
         let input_eval =
             BaseEvaluationConfig::configure(meta, input_base, input_lane);
         let output_eval =
@@ -185,19 +182,23 @@ mod tests {
                 let mut raw = input_big;
                 let mut input_chunk_indices = vec![];
                 let mut ouput_chunk_indices = vec![];
-                // little-endian
+                // big-endian
                 let input_chunks: Vec<u64> = (0..64)
+                    // little endian
                     .map(|_| {
                         let remainder: u64 = mod_u64(&raw, input_base);
                         raw /= input_base;
                         remainder
                     })
-                    .collect();
+                    .collect()
+                    // big endian
+                    .reverse();
                 let input_coefs: Vec<F> = input_chunks
                     .chunks(num_chunks)
                     .map(|chunks| {
                         let coef = chunks
                             .iter()
+                            // big endian
                             .fold(0, |acc, &x| acc * input_base + x);
                         F::from(coef)
                     })
@@ -215,8 +216,10 @@ mod tests {
                 let input_pob = input_chunks
                     .chunks(num_chunks)
                     .map(|chunks| {
+                        // usually this is `num_chunks` but it's possible the
+                        // last slice is less than `num_chunks`
                         let size = chunks.len();
-                        F::from(input_base).pow(&[size as u64, 0, 0, 0])
+                        F::from(input_base.pow(size as u32))
                     })
                     .collect();
 
@@ -224,7 +227,7 @@ mod tests {
                     .chunks(num_chunks)
                     .map(|chunks| {
                         let size = chunks.len();
-                        F::from(output_base).pow(&[size as u64, 0, 0, 0])
+                        F::from(output_base.pow(size as u32))
                     })
                     .collect();
 
