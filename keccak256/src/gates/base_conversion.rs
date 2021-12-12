@@ -1,6 +1,6 @@
 use halo2::{
     circuit::Layouter,
-    plonk::{Advice, Column, ConstraintSystem, Error, Selector, TableColumn},
+    plonk::{Advice, Column, ConstraintSystem, Error, Selector},
     poly::Rotation,
 };
 
@@ -10,7 +10,7 @@ use crate::gates::tables::BaseInfo;
 use pairing::arithmetic::FieldExt;
 
 #[derive(Clone, Debug)]
-struct BaseConversionConfig<F> {
+pub struct BaseConversionConfig<F> {
     q_enable: Selector,
     bi: BaseInfo<F>,
     input_eval: BaseEvaluationConfig<F>,
@@ -19,7 +19,7 @@ struct BaseConversionConfig<F> {
 
 impl<F: FieldExt> BaseConversionConfig<F> {
     /// Side effect: input_lane and output_lane are equality enabled
-    fn configure(
+    pub fn configure(
         meta: &mut ConstraintSystem<F>,
         bi: BaseInfo<F>,
         input_lane: Column<Advice>,
