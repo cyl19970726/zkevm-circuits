@@ -210,7 +210,10 @@ impl<F: FieldExt> BaseInfo<F> {
         F::from(self.output_base.pow(self.num_chunks as u32))
     }
 
-    pub fn compute_coefs(&self, input: F) -> Result<(Vec<F>, Vec<F>), Error> {
+    pub fn compute_coefs(
+        &self,
+        input: F,
+    ) -> Result<(Vec<F>, Vec<F>, F), Error> {
         // big-endian
         let input_chunks: Vec<u64> = {
             let mut raw = f_to_biguint(input).ok_or(Error::Synthesis)?;
@@ -243,6 +246,12 @@ impl<F: FieldExt> BaseInfo<F> {
             B9 => convert_b9_coef,
             _ => unreachable!(),
         };
+        let output: F = {
+            let output_base = F::from(self.output_base);
+            input_chunks.iter().fold(F::zero(), |acc, &x| {
+                acc * output_base + F::from(convert_chunk(x))
+            })
+        };
 
         let output_coefs: Vec<F> = input_chunks
             .chunks(self.num_chunks)
@@ -253,7 +262,7 @@ impl<F: FieldExt> BaseInfo<F> {
                 F::from(coef)
             })
             .collect();
-        Ok((input_coefs, output_coefs))
+        Ok((input_coefs, output_coefs, output))
     }
 }
 
