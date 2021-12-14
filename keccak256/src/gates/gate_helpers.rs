@@ -8,7 +8,6 @@ pub struct CellF<F> {
     pub value: F,
 }
 
-
 #[derive(Debug, Clone)]
 pub struct Lane<F> {
     pub cell: Cell,
