@@ -87,7 +87,7 @@ impl Default for GlobalCounter {
 impl GlobalCounter {
     /// Create a new GlobalCounter with the initial default value
     pub fn new() -> Self {
-        Self(0)
+        Self(1)
     }
 
     /// Increase Self by one

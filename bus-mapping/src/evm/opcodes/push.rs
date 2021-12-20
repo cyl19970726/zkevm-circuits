@@ -1,10 +1,7 @@
 use super::Opcode;
 use crate::circuit_input_builder::CircuitInputStateRef;
 use crate::eth_types::GethExecStep;
-use crate::{
-    operation::{StackOp, RW},
-    Error,
-};
+use crate::{operation::RW, Error};
 
 /// Placeholder structure used to implement [`Opcode`] trait over it
 /// corresponding to the `OpcodeId::PUSH*` `OpcodeId`.
@@ -20,13 +17,13 @@ impl<const N: usize> Opcode for Push<N> {
         steps: &[GethExecStep],
     ) -> Result<(), Error> {
         let step = &steps[0];
-        state.push_op(StackOp::new(
+        state.push_stack_op(
             RW::WRITE,
             // Get the value and addr from the next step. Being the last
             // position filled with an element in the stack
             step.stack.last_filled().map(|a| a - 1),
             steps[1].stack.last()?,
-        ));
+        );
 
         Ok(())
     }
@@ -84,11 +81,11 @@ mod push_tests {
                 test_builder.state_ref(&mut tx, &mut tx_ctx, &mut step);
 
             // Add StackOp associated to the push at the latest Stack pos.
-            state_ref.push_op(StackOp::new(
+            state_ref.push_stack_op(
                 RW::WRITE,
                 StackAddress::from(1023 - i),
                 *word,
-            ));
+            );
             tx.steps_mut().push(step);
         }
 
